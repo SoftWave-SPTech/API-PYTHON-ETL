@@ -106,6 +106,36 @@ Faz upload de um extrato bancário e processa as transações.
 - `400`: Arquivo vazio ou formato inválido
 - `422`: Erro ao processar o arquivo (formato incorreto ou dados inválidos)
 
+### Exportar Extrato em CSV
+
+**GET** `/etl/extrato/csv`
+
+Exporta todas as transações da tabela do banco de dados em formato CSV.
+
+**Parâmetros:** Nenhum
+
+**Resposta (200):**
+Retorna um arquivo CSV com as seguintes colunas:
+- `id`: ID da transação
+- `data_pagamento`: Data no formato DD/MM/YYYY
+- `descricao`: Descrição da transação
+- `tipo`: Tipo (receita ou despesa)
+- `valor`: Valor da transação
+- `arquivo_origem`: Nome do arquivo de origem
+- `data_insercao`: Data de inserção no banco (DD/MM/YYYY HH:MM:SS)
+
+**Exemplo de conteúdo do CSV:**
+```csv
+id,data_pagamento,descricao,tipo,valor,arquivo_origem,data_insercao
+1,08/03/2026,Compra débito,despesa,150.50,extrato.csv,08/03/2026 10:30:45
+2,07/03/2026,Transferência recebida,receita,500.00,extrato.csv,08/03/2026 10:30:45
+```
+
+**Erros:**
+- `404`: Nenhuma transação encontrada na tabela
+- `503`: Falha de conexão com banco de dados
+- `500`: Erro ao exportar o extrato
+
 ## 🧪 Como Testar
 
 ### Opção 1: Swagger UI (Recomendado)
@@ -117,6 +147,13 @@ Faz upload de um extrato bancário e processa as transações.
    - `persistir`: true ou false (opcional)
    - `arquivo`: Clique em "Choose File" e selecione o arquivo
 4. Clique em "Execute"
+
+#### Testar exportação de CSV
+
+1. Acesse: `http://localhost:8000/docs`
+2. Clique no endpoint `/etl/extrato/csv`
+3. Clique em "Execute"
+4. O navegador fará download do arquivo `extrato.csv`
 
 ### Opção 2: curl (Git Bash)
 
@@ -153,6 +190,12 @@ curl -X POST \
   -F "persistir=true" \
   -F "arquivo=@$file" \
   http://localhost:8000/etl/upload
+
+# Exportar extrato em CSV
+curl -X GET \
+  -H "accept: text/csv" \
+  -o extrato_exportado.csv \
+  http://localhost:8000/etl/extrato/csv
 ```
 
 ### Opção 3: Python/Requests
