@@ -1,8 +1,12 @@
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi.responses import StreamingResponse
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
+import io
+import csv
 
+from app.db.models import Transacao
 from app.db.session import get_session
 from app.etl import extrair_bradesco_csv, extrair_c6_csv, extrair_itau_pdf
 from app.etl.bradesco import extrair_dataframe_bradesco_csv
@@ -67,7 +71,6 @@ def db_health(session: Session = Depends(get_session)):
     except SQLAlchemyError as e:
         raise HTTPException(status_code=503, detail=f"Falha de conexão com banco: {e}") from e
 
-
 @router.post("/preview")
 async def preview_extrato(
     banco: Banco,
@@ -106,3 +109,60 @@ async def preview_extrato(
         "colunas": [str(col) for col in df.columns.tolist()],
         "amostra": df.head(limite).to_dict(orient="records"),
     }
+
+
+@router.get("/extrato/csv")
+def exportar_extrato_csv(session: Session = Depends(get_session)):
+    """
+    Exporta todas as transações da tabela em formato CSV.
+    
+    Retorna um arquivo CSV com as colunas: id, data_pagamento, descricao, tipo, valor, arquivo_origem, data_insercao
+    """
+    try:
+        # Busca todas as transações da tabela
+        transacoes = session.query(Transacao).all()
+        
+        if not transacoes:
+            raise HTTPException(status_code=404, detail="Nenhuma transação encontrada na tabela.")
+        
+        # Cria um buffer em memória para o CSV
+        output = io.StringIO()
+        writer = csv.writer(output)
+        
+        # Escreve o cabeçalho
+        writer.writerow([
+            "id",
+            "data_pagamento",
+            "descricao",
+            "tipo",
+            "valor",
+            "arquivo_origem",
+            "data_insercao"
+        ])
+        
+        # Escreve as linhas de dados
+        for transacao in transacoes:
+            writer.writerow([
+                transacao.id,
+                transacao.data_pagamento,
+                transacao.descricao,
+                transacao.tipo,
+                str(transacao.valor),
+                transacao.arquivo_origem,
+                transacao.data_insercao.strftime("%d/%m/%Y %H:%M:%S") if transacao.data_insercao else ""
+            ])
+        
+        # Retorna o CSV como um arquivo para download
+        output.seek(0)
+        return StreamingResponse(
+            iter([output.getvalue()]),
+            media_type="text/csv",
+            headers={"Content-Disposition": "attachment; filename=extrato.csv"}
+        )
+    
+    except HTTPException:
+        raise
+    except SQLAlchemyError as e:
+        raise HTTPException(status_code=503, detail=f"Falha de banco de dados: {e}") from e
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Falha ao exportar extrato: {e}") from e
