@@ -1,0 +1,12 @@
+mysql-connector-python
+fastapi
+uvicorn
+sqlalchemy
+pydantic-settings
+ofxparse
+pandas
+pdfplumber
+requests
+python-dotenv
+psycopg2-binary
+python-multipart
