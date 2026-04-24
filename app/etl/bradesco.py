@@ -1,9 +1,11 @@
 from datetime import datetime
 from decimal import Decimal
-
 import pandas as pd
-
+import io
+import logging
 from app.schemas import TipoTransacao, TransacaoNormalizada
+
+logger = logging.getLogger(__name__)
 
 
 def _eh_data_valida(texto: str) -> bool:
@@ -33,66 +35,90 @@ def _limpar_texto(texto: str) -> str:
     return (texto or "").strip()
 
 
-def _ler_csv_bradesco(conteudo: bytes) -> pd.DataFrame:
-    for encoding in ("utf-8-sig", "latin1"):
-        for sep in (";", ","):
-            try:
-                return pd.read_csv(
-                    pd.io.common.BytesIO(conteudo),
-                    encoding=encoding,
-                    sep=sep,
-                    dtype=str,
-                )
-            except Exception:
-                continue
-    raise ValueError("Bradesco: não foi possível ler o CSV.")
-
-
 def extrair_dataframe_bradesco_csv(conteudo: bytes) -> pd.DataFrame:
-    df = _ler_csv_bradesco(conteudo).copy()
-    df.columns = [str(col).strip().lower() for col in df.columns]
-
-    rename_map = {
-        "data": "data_pagamento",
-        "historico": "descricao",
-        "histórico": "descricao",
-        "tipo": "tipo_bradesco",
-        "valor": "valor",
-    }
-    df = df.rename(columns=rename_map)
-
-    obrigatorias = ["data_pagamento", "descricao", "tipo_bradesco", "valor"]
-    faltando = set(obrigatorias) - set(df.columns)
-    if faltando:
-        raise ValueError(f"Bradesco: colunas obrigatórias ausentes: {sorted(faltando)}")
-
-    df = df[obrigatorias].copy()
-    df["data_pagamento"] = df["data_pagamento"].astype(str).str.strip()
-    df["descricao"] = df["descricao"].astype(str).str.strip()
-    df["tipo_bradesco"] = df["tipo_bradesco"].astype(str).str.strip().str.upper()
-    df["valor"] = df["valor"].apply(_limpar_valor)
-
-    df = df[df["data_pagamento"].apply(_eh_data_valida)]
-    df = df.dropna(subset=["valor"])
-    df = df[df["descricao"].str.upper() != "SALDO ANTERIOR"]
-
-    def _mapear_tipo(tipo_bradesco: str, valor: float) -> str | None:
-        if tipo_bradesco == "CREDITO":
-            return TipoTransacao.receita.value
-        if tipo_bradesco == "DEBITO":
-            return TipoTransacao.despesa.value
-        if valor > 0:
-            return TipoTransacao.receita.value
-        if valor < 0:
-            return TipoTransacao.despesa.value
-        return None
-
-    df["tipo"] = df.apply(lambda row: _mapear_tipo(row["tipo_bradesco"], row["valor"]), axis=1)
-    df = df.dropna(subset=["tipo"])
-    df["data_pagamento"] = df["data_pagamento"].apply(_limpar_data)
-    df["valor"] = df["valor"].abs().round(2)
-
-    return df[["data_pagamento", "descricao", "valor", "tipo"]].drop_duplicates().reset_index(drop=True)
+    """
+    Processa o extrato do Bradesco linha por linha.
+    Formato esperado (após a primeira linha de info):
+    Data;Histórico;Docto.;Crédito (R$);Débito (R$);Saldo (R$)
+    """
+    dados = []
+    
+    # Converte bytes para string
+    try:
+        conteudo_str = conteudo.decode('utf-8-sig')
+    except:
+        conteudo_str = conteudo.decode('latin1')
+    
+    linhas = conteudo_str.strip().split('\n')
+    logger.info(f"Total de linhas no arquivo: {len(linhas)}")
+    
+    # Pula a primeira linha (informações da conta)
+    # e a segunda linha (cabeçalho)
+    for idx, linha in enumerate(linhas[2:], start=2):
+        logger.debug(f"Processando linha {idx}: {linha}")
+        
+        # Interrompe se encontrar palavras-chave de fim de dados
+        if any(palavra in linha.lower() for palavra in ["lancamentos", "filtro", "dados acima", "ultimos", "total", "nao ha"]):
+            logger.info(f"Parando na linha {idx}: encontrou palavra-chave de fim")
+            break
+        
+        # Separa as colunas
+        colunas = linha.strip().split(";")
+        
+        # Precisa de pelo menos 5 colunas (Data, Histórico, Docto, Crédito, Débito)
+        if len(colunas) < 5:
+            logger.debug(f"Pulando linha {idx}: menos de 5 colunas")
+            continue
+        
+        # Extrai e valida data
+        data_raw = colunas[0].strip()
+        if not _eh_data_valida(data_raw):
+            logger.debug(f"Pulando linha {idx}: data inválida '{data_raw}'")
+            continue
+        
+        # Extrai descrição
+        descricao = _limpar_texto(colunas[1])
+        if not descricao or descricao.upper() == "SALDO ANTERIOR":
+            logger.debug(f"Pulando linha {idx}: descrição vazia ou saldo anterior")
+            continue
+        
+        # Extrai crédito e débito
+        credito = _limpar_valor(colunas[3])
+        debito = _limpar_valor(colunas[4])
+        
+        # Determina valor e tipo
+        if credito and credito > 0:
+            valor = credito
+            tipo = TipoTransacao.receita.value
+        elif debito and debito > 0:
+            valor = debito
+            tipo = TipoTransacao.despesa.value
+        else:
+            logger.debug(f"Pulando linha {idx}: crédito={credito}, débito={debito}")
+            continue
+        
+        # Adiciona à lista de dados
+        dados.append({
+            "data_pagamento": _limpar_data(data_raw),
+            "descricao": descricao[:255],
+            "valor": round(valor, 2),
+            "tipo": tipo
+        })
+        logger.debug(f"Linha {idx} adicionada: {data_raw}, {descricao}, {valor}, {tipo}")
+    
+    logger.info(f"Total de transações processadas: {len(dados)}")
+    
+    if not dados:
+        raise ValueError("Bradesco: nenhuma transação válida encontrada no CSV")
+    
+    # Converte para DataFrame
+    df = pd.DataFrame(dados)
+    
+    # Remove duplicatas e reseta índice
+    df = df.drop_duplicates().reset_index(drop=True)
+    
+    logger.info(f"Após remover duplicatas: {len(df)} linhas")
+    return df
 
 
 def extrair_bradesco_csv(conteudo: bytes) -> list[TransacaoNormalizada]:
@@ -107,4 +133,5 @@ def extrair_bradesco_csv(conteudo: bytes) -> list[TransacaoNormalizada]:
                 valor=Decimal(str(row["valor"])).quantize(Decimal("0.01")),
             )
         )
+    logger.info(f"Retornando {len(itens)} transações normalizadas")
     return itens

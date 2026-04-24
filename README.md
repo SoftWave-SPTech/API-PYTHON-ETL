@@ -42,9 +42,17 @@ Esta API processa extratos bancários em formato CSV (C6 e Bradesco) e PDF (Ita�
    
    Crie um arquivo `.env` na raiz do projeto com as configurações do banco de dados:
    ```env
-   DATABASE_URL=postgresql://usuario:senha@localhost:5432/nome_database
-   API_TITLE=API-PYTHON-ETL
-   API_VERSION=1.0.0
+   DB_HOST=localhost
+   DB_PORT=3306
+   DB_USER=usuario
+   DB_PASSWORD=senha
+   DB_NAME=softwave
+   DB_CONNECTION_TIMEOUT=15
+   DB_AUTOCOMMIT=false
+   DB_CHARSET=utf8mb4
+   DB_USE_PURE=true
+   API_TITLE=ETL Extratos Bancarios
+    API_VERSION=1.0.0
    ```
 
 5. **Execute a API (usando Git Bash):**
@@ -117,18 +125,25 @@ Exporta todas as transações da tabela do banco de dados em formato CSV.
 **Resposta (200):**
 Retorna um arquivo CSV com as seguintes colunas:
 - `id`: ID da transação
-- `data_pagamento`: Data no formato DD/MM/YYYY
-- `descricao`: Descrição da transação
-- `tipo`: Tipo (receita ou despesa)
+- `honorario_id`: ID do honorário associado (chave estrangeira)
+- `titulo`: Título da transação
 - `valor`: Valor da transação
+- `tipo`: Tipo de transação
+- `status_financeiro`: Status financeiro
+- `status_aprovacao`: Status de aprovação
+- `data_emissao`: Data de emissão (DD/MM/YYYY)
+- `data_vencimento`: Data de vencimento (DD/MM/YYYY)
+- `data_pagamento`: Data de pagamento (DD/MM/YYYY)
+- `descricao`: Descrição detalhada
+- `observacoes`: Observações adicionais
+- `contraparte`: Contraparte da transação
 - `arquivo_origem`: Nome do arquivo de origem
 - `data_insercao`: Data de inserção no banco (DD/MM/YYYY HH:MM:SS)
 
 **Exemplo de conteúdo do CSV:**
 ```csv
-id,data_pagamento,descricao,tipo,valor,arquivo_origem,data_insercao
-1,08/03/2026,Compra débito,despesa,150.50,extrato.csv,08/03/2026 10:30:45
-2,07/03/2026,Transferência recebida,receita,500.00,extrato.csv,08/03/2026 10:30:45
+id,honorario_id,titulo,valor,tipo,status_financeiro,status_aprovacao,data_emissao,data_vencimento,data_pagamento,descricao,observacoes,contraparte,arquivo_origem,data_insercao
+1,10,Fatura 001,1500.00,receita,pago,aprovado,01/03/2026,15/03/2026,08/03/2026,Serviços prestados,Pago com sucesso,Empresa XYZ,extrato.csv,08/03/2026 10:30:45
 ```
 
 **Erros:**
