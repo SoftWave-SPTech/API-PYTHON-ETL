@@ -52,7 +52,7 @@ Esta API processa extratos banc√°rios em formato CSV (C6 e Bradesco) e PDF (Ita√
    DB_CHARSET=utf8mb4
    DB_USE_PURE=true
    API_TITLE=ETL Extratos Bancarios
-    API_VERSION=1.0.0
+   API_VERSION=1.0.0
    ```
 
 5. **Execute a API (usando Git Bash):**
