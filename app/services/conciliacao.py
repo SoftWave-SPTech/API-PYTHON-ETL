@@ -9,21 +9,29 @@ logger = logging.getLogger(__name__)
 
 
 SQL_CREATE_TRANSACOES = """
-CREATE TABLE IF NOT EXISTS transacoes (
+CREATE TABLE IF NOT EXISTS transacao (
     id INT AUTO_INCREMENT PRIMARY KEY,
+    honorario_id INT,
+    titulo VARCHAR(150),
+    valor DECIMAL(10,2),
+    tipo VARCHAR(50),
+    status_financeiro VARCHAR(50),
+    status_aprovacao VARCHAR(50),
+    data_emissao DATE,
+    data_vencimento DATE,
     data_pagamento VARCHAR(10) NOT NULL,
-    descricao VARCHAR(255) NOT NULL,
-    tipo ENUM('receita','despesa') NOT NULL,
-    valor DECIMAL(12,2) NOT NULL,
+    descricao TEXT,
+    observacoes TEXT,
+    contraparte VARCHAR(150),
     arquivo_origem VARCHAR(255) NOT NULL,
-    data_insercao TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE KEY uk_transacao (data_pagamento, descricao, tipo, valor, arquivo_origem)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    data_insercao TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+)
 """
 
 
 def garantir_tabela_transacoes(session: Session) -> None:
-    """Cria a tabela transacoes se não existir."""
+    """Cria as tabelas se não existirem"""
+    # Cria a tabela transacao com a foreign key
     session.execute(text(SQL_CREATE_TRANSACOES))
 
 
@@ -63,9 +71,10 @@ def transacao_existe(session: Session, t: TransacaoNormalizada) -> bool:
 
 
 def inserir_transacao(session: Session, t: TransacaoNormalizada, arquivo_origem: str) -> None:
-    """Insere uma linha na tabela transacoes (após checagem de duplicidade por data/tipo/valor)."""
+    """Insere uma linha na tabela transacao (após checagem de duplicidade por data/tipo/valor)."""
     session.add(
         Transacao(
+            honorario_id=None,
             data_pagamento=t.data_pagamento[:10],
             descricao=(t.descricao or "")[:255],
             tipo=t.tipo.value,

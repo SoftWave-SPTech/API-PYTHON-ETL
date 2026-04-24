@@ -7,14 +7,18 @@ from app.schemas import TipoTransacao, TransacaoNormalizada
 
 
 def _ler_csv_c6(conteudo: bytes) -> pd.DataFrame:
-    for params in (
-        {"encoding": "utf-8", "sep": ","},
-        {"encoding": "latin1", "sep": ","},
-        {"encoding": "utf-8", "sep": ";"},
-        {"encoding": "latin1", "sep": ";"},
-    ):
+    """
+    O extrato do C6 Bank possui 8 linhas de metadados antes do header.
+    Colunas: Data Lançamento, Data Contábil, Título, Descrição, Entrada(R$), Saída(R$), Saldo do Dia(R$)
+    """
+    for enc in ("utf-8-sig", "utf-8", "latin1"):
         try:
-            return pd.read_csv(io.BytesIO(conteudo), **params)
+            return pd.read_csv(
+                io.BytesIO(conteudo),
+                encoding=enc,
+                sep=",",
+                skiprows=8,
+            )
         except Exception:
             continue
     raise ValueError("C6: não foi possível ler o CSV.")
@@ -22,39 +26,64 @@ def _ler_csv_c6(conteudo: bytes) -> pd.DataFrame:
 
 def extrair_dataframe_c6_csv(conteudo: bytes) -> pd.DataFrame:
     df = _ler_csv_c6(conteudo).copy()
-    df.columns = [str(col).strip().lower() for col in df.columns]
+    df.columns = [str(col).strip() for col in df.columns]
 
-    rename_map = {}
+    rename_map: dict[str, str] = {}
     for col in df.columns:
-        if "data" in col:
+        col_lower = col.lower()
+        if "lançamento" in col_lower or "lancamento" in col_lower:
             rename_map[col] = "data_pagamento"
-        elif "desc" in col or "hist" in col:
+        elif "descrição" in col_lower or "descricao" in col_lower:
             rename_map[col] = "descricao"
-        elif "valor" in col:
-            rename_map[col] = "valor"
+        elif "entrada" in col_lower:
+            rename_map[col] = "entrada"
+        elif "saída" in col_lower or "saida" in col_lower:
+            rename_map[col] = "saida"
+
     df = df.rename(columns=rename_map)
 
-    obrigatorias = ["data_pagamento", "descricao", "valor"]
+    obrigatorias = ["data_pagamento", "descricao", "entrada", "saida"]
     faltando = set(obrigatorias) - set(df.columns)
     if faltando:
         raise ValueError(f"C6: colunas obrigatórias ausentes: {sorted(faltando)}")
 
     df = df[obrigatorias].copy()
-    df["descricao"] = df["descricao"].astype(str).str.strip()
-    df["data_pagamento"] = pd.to_datetime(df["data_pagamento"], errors="coerce").dt.strftime("%d/%m/%Y")
-    df["valor"] = (
-        df["valor"]
-        .astype(str)
-        .str.replace(".", "", regex=False)
-        .str.replace(",", ".", regex=False)
-        .str.replace(r"[^\d\.-]", "", regex=True)
-    )
-    df["valor"] = pd.to_numeric(df["valor"], errors="coerce")
 
-    df = df.dropna(subset=["data_pagamento", "descricao", "valor"])
-    df["tipo"] = df["valor"].apply(lambda v: TipoTransacao.receita.value if v >= 0 else TipoTransacao.despesa.value)
-    df["valor"] = df["valor"].abs().round(2)
-    df = df.drop_duplicates().reset_index(drop=True)
+    df["descricao"] = df["descricao"].astype(str).str.strip()
+
+    df["data_pagamento"] = pd.to_datetime(
+        df["data_pagamento"], dayfirst=True, errors="coerce"
+    ).dt.strftime("%d/%m/%Y")
+
+    def _parse_valor(serie: pd.Series) -> pd.Series:
+        return (
+            serie.astype(str)
+            .str.replace(r"\s", "", regex=True)
+            .str.replace(".", "", regex=False)
+            .str.replace(",", ".", regex=False)
+            .str.replace(r"[^\d\.-]", "", regex=True)
+            .pipe(pd.to_numeric, errors="coerce")
+            .fillna(0.0)
+        )
+
+    df["entrada"] = _parse_valor(df["entrada"])
+    df["saida"] = _parse_valor(df["saida"])
+
+    # Cada linha tem entrada OU saída — nunca os dois simultaneamente.
+    # entrada > 0 → receita   |   saida > 0 → despesa
+    df["tipo"] = df.apply(
+        lambda r: TipoTransacao.receita.value if r["entrada"] > 0 else TipoTransacao.despesa.value,
+        axis=1,
+    )
+    df["valor"] = df.apply(
+        lambda r: r["entrada"] if r["entrada"] > 0 else r["saida"],
+        axis=1,
+    ).round(2)
+
+    df = df[["data_pagamento", "descricao", "tipo", "valor"]]
+    df = df[df["valor"] > 0]  # descarta linhas com ambos zero
+    df = df.dropna(subset=["data_pagamento", "descricao"]).drop_duplicates().reset_index(drop=True)
+
     return df
 
 
