@@ -116,7 +116,9 @@ def exportar_extrato_csv(session: Session = Depends(get_session)):
     """
     Exporta todas as transações da tabela em formato CSV.
     
-    Retorna um arquivo CSV com as colunas: id, data_pagamento, descricao, tipo, valor, arquivo_origem, data_insercao
+    Retorna um arquivo CSV com as colunas: id, honorario_id, titulo, valor, tipo, status_financeiro, 
+    status_aprovacao, data_emissao, data_vencimento, data_pagamento, descricao, observacoes, 
+    contraparte, arquivo_origem, data_insercao
     """
     try:
         # Busca todas as transações da tabela
@@ -132,10 +134,18 @@ def exportar_extrato_csv(session: Session = Depends(get_session)):
         # Escreve o cabeçalho
         writer.writerow([
             "id",
+            "honorario_id",
+            "titulo",
+            "valor",
+            "tipo",
+            "status_financeiro",
+            "status_aprovacao",
+            "data_emissao",
+            "data_vencimento",
             "data_pagamento",
             "descricao",
-            "tipo",
-            "valor",
+            "observacoes",
+            "contraparte",
             "arquivo_origem",
             "data_insercao"
         ])
@@ -144,10 +154,18 @@ def exportar_extrato_csv(session: Session = Depends(get_session)):
         for transacao in transacoes:
             writer.writerow([
                 transacao.id,
+                transacao.honorario_id,
+                transacao.titulo or "",
+                str(transacao.valor) if transacao.valor else "",
+                transacao.tipo or "",
+                transacao.status_financeiro or "",
+                transacao.status_aprovacao or "",
+                transacao.data_emissao.strftime("%d/%m/%Y") if transacao.data_emissao else "",
+                transacao.data_vencimento.strftime("%d/%m/%Y") if transacao.data_vencimento else "",
                 transacao.data_pagamento,
-                transacao.descricao,
-                transacao.tipo,
-                str(transacao.valor),
+                transacao.descricao or "",
+                transacao.observacoes or "",
+                transacao.contraparte or "",
                 transacao.arquivo_origem,
                 transacao.data_insercao.strftime("%d/%m/%Y %H:%M:%S") if transacao.data_insercao else ""
             ])
