@@ -12,6 +12,7 @@ class Transacao(Base):
     __tablename__ = "transacao"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
+    usuario_id = Column(String(64), nullable=True)
     honorario_id = Column(Integer, nullable=True)
     titulo = Column(String(150))
     valor = Column(Numeric(10, 2))
@@ -26,3 +27,18 @@ class Transacao(Base):
     contraparte = Column(String(150))
     arquivo_origem = Column(String(255), nullable=True)
     data_insercao = Column(DateTime, server_default=func.current_timestamp())
+
+
+class ImportacaoHistorico(Base):
+    __tablename__ = "importacao_historico"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    usuario_id = Column(String(64), nullable=False)
+    tipo = Column(String(50), nullable=False)
+    arquivo = Column(String(255), nullable=False)
+    data = Column(DateTime, server_default=func.current_timestamp())
+    status = Column(String(20), nullable=False, default="concluido")
+    registros = Column(Integer, nullable=False, default=0)
+    novos = Column(Integer, nullable=False, default=0)
+    atualizados = Column(Integer, nullable=False, default=0)
+    erros = Column(Integer, nullable=False, default=0)

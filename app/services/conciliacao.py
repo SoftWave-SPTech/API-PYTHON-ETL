@@ -11,6 +11,7 @@ logger = logging.getLogger(__name__)
 SQL_CREATE_TRANSACOES = """
 CREATE TABLE IF NOT EXISTS transacao (
     id INT AUTO_INCREMENT PRIMARY KEY,
+    usuario_id VARCHAR(64),
     honorario_id INT,
     titulo VARCHAR(150),
     valor DECIMAL(10,2),
@@ -35,6 +36,13 @@ def garantir_tabela_transacoes(session: Session) -> None:
     session.execute(text(SQL_CREATE_TRANSACOES))
 
 
+def _garantir_coluna_usuario_id(session: Session) -> None:
+    """Compatibilidade com bancos já existentes sem a coluna usuario_id."""
+    rows = session.execute(text("SHOW COLUMNS FROM transacao LIKE 'usuario_id'")).fetchall()
+    if not rows:
+        session.execute(text("ALTER TABLE transacao ADD COLUMN usuario_id VARCHAR(64) NULL"))
+
+
 def _variantes_data(data: str) -> list[str]:
     """YYYY-MM-DD e DD/MM/AAAA para conciliar registros novos e legados."""
     data = (data or "").strip()
@@ -53,7 +61,7 @@ def _variantes_data(data: str) -> list[str]:
     return [data]
 
 
-def transacao_existe(session: Session, t: TransacaoNormalizada) -> bool:
+def transacao_existente_id(session: Session, t: TransacaoNormalizada, usuario_id: str | None) -> int | None:
     """
     Conciliação: mesma data, mesmo tipo (receita/despesa) e mesmo valor.
     """
@@ -61,27 +69,30 @@ def transacao_existe(session: Session, t: TransacaoNormalizada) -> bool:
     q = (
         select(Transacao.id)
         .where(
+            Transacao.usuario_id == usuario_id,
             Transacao.data_pagamento.in_(datas),
             Transacao.tipo == t.tipo.value,
             Transacao.valor == t.valor,
         )
         .limit(1)
     )
-    return session.execute(q).scalar_one_or_none() is not None
+    return session.execute(q).scalar_one_or_none()
 
 
-def inserir_transacao(session: Session, t: TransacaoNormalizada, arquivo_origem: str) -> None:
+def inserir_transacao(session: Session, t: TransacaoNormalizada, arquivo_origem: str, usuario_id: str | None) -> int:
     """Insere uma linha na tabela transacao (após checagem de duplicidade por data/tipo/valor)."""
-    session.add(
-        Transacao(
-            honorario_id=None,
-            data_pagamento=t.data_pagamento[:10],
-            descricao=(t.descricao or "")[:255],
-            tipo=t.tipo.value,
-            valor=t.valor,
-            arquivo_origem=arquivo_origem[:255],
-        )
+    nova = Transacao(
+        usuario_id=usuario_id,
+        honorario_id=None,
+        data_pagamento=t.data_pagamento[:10],
+        descricao=(t.descricao or "")[:255],
+        tipo=t.tipo.value,
+        valor=t.valor,
+        arquivo_origem=arquivo_origem[:255],
     )
+    session.add(nova)
+    session.flush()
+    return int(nova.id)
 
 
 def processar_com_conciliacao(
@@ -90,6 +101,7 @@ def processar_com_conciliacao(
     arquivo_origem: str,
     itens: list[TransacaoNormalizada],
     persistir: bool,
+    usuario_id: str | None = None,
 ) -> ResultadoEtl:
     linhas: list[LinhaConciliacao] = []
     duplicatas = 0
@@ -98,6 +110,7 @@ def processar_com_conciliacao(
     if persistir:
         try:
             garantir_tabela_transacoes(session)
+            _garantir_coluna_usuario_id(session)
         except Exception as e:
             logger.error(f"Erro ao criar tabela transacoes: {e}")
             raise
@@ -105,19 +118,24 @@ def processar_com_conciliacao(
     for t in itens:
         ja_existia = False
         inserida = False
+        transacao_id: int | None = None
         if persistir:
             try:
-                ja_existia = transacao_existe(session, t)
+                existente_id = transacao_existente_id(session, t, usuario_id)
+                ja_existia = existente_id is not None
                 if not ja_existia:
-                    inserir_transacao(session, t, arquivo_origem)
+                    transacao_id = inserir_transacao(session, t, arquivo_origem, usuario_id)
                     inserida = True
                     inseridas += 1
                 else:
+                    transacao_id = existente_id
                     duplicatas += 1
             except Exception as e:
                 logger.error(f"Erro ao processar transacao {t}: {e}")
                 raise
-        linhas.append(LinhaConciliacao(transacao=t, ja_existia=ja_existia, inserida=inserida))
+        linhas.append(
+            LinhaConciliacao(transacao=t, ja_existia=ja_existia, inserida=inserida, transacao_id=transacao_id)
+        )
 
     if persistir:
         try:
