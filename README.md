@@ -57,7 +57,7 @@ Esta API processa extratos bancários em formato CSV (C6 e Bradesco) e PDF (Ita�
 
 5. **Execute a API (usando Git Bash):**
    ```bash
-   py -m uvicorn app.main:app --reload
+   py -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
    ```
 
    A API estará disponível em: `http://localhost:8000`

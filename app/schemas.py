@@ -26,6 +26,8 @@ class LinhaConciliacao(BaseModel):
     transacao: TransacaoNormalizada
     ja_existia: bool
     inserida: bool
+    transacao_id: int | None = None
+    usuario_id: int | None = None
 
 
 class ResultadoEtl(BaseModel):

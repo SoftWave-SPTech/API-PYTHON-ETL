@@ -28,7 +28,7 @@ class Settings(BaseSettings):
         if self.database_url.strip():
             return self.database_url.strip()
 
-        # ✅ Encode da senha para escapar caracteres especiais
+        # Encode da senha para escapar caracteres especiais
         password_encoded = quote_plus(self.db_password)
 
         return (
