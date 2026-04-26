@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 SQL_CREATE_TRANSACOES = """
 CREATE TABLE IF NOT EXISTS transacao (
     id INT AUTO_INCREMENT PRIMARY KEY,
-    usuario_id VARCHAR(64),
+    usuario_id INT NOT NULL,
     honorario_id INT,
     titulo VARCHAR(150),
     valor DECIMAL(10,2),
@@ -25,7 +25,8 @@ CREATE TABLE IF NOT EXISTS transacao (
     observacoes TEXT,
     contraparte VARCHAR(150),
     arquivo_origem VARCHAR(255) NOT NULL,
-    data_insercao TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    data_insercao TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT fk_transacao_usuario FOREIGN KEY (usuario_id) REFERENCES usuario(id)
 )
 """
 
@@ -36,11 +37,53 @@ def garantir_tabela_transacoes(session: Session) -> None:
     session.execute(text(SQL_CREATE_TRANSACOES))
 
 
-def _garantir_coluna_usuario_id(session: Session) -> None:
-    """Compatibilidade com bancos já existentes sem a coluna usuario_id."""
-    rows = session.execute(text("SHOW COLUMNS FROM transacao LIKE 'usuario_id'")).fetchall()
-    if not rows:
-        session.execute(text("ALTER TABLE transacao ADD COLUMN usuario_id VARCHAR(64) NULL"))
+def _garantir_usuario_fk_obrigatorio(session: Session) -> None:
+    """
+    Garante que transacao.usuario_id seja INT NOT NULL e FK para usuario(id).
+    """
+    colunas = session.execute(text("SHOW COLUMNS FROM transacao LIKE 'usuario_id'")).mappings().all()
+    if not colunas:
+        session.execute(text("ALTER TABLE transacao ADD COLUMN usuario_id INT NULL"))
+    session.execute(text("ALTER TABLE transacao MODIFY COLUMN usuario_id INT NOT NULL"))
+
+    fk_rows = session.execute(
+        text(
+            """
+            SELECT CONSTRAINT_NAME
+            FROM information_schema.KEY_COLUMN_USAGE
+            WHERE TABLE_SCHEMA = DATABASE()
+              AND TABLE_NAME = 'transacao'
+              AND COLUMN_NAME = 'usuario_id'
+              AND REFERENCED_TABLE_NAME = 'usuario'
+              AND REFERENCED_COLUMN_NAME = 'id'
+            LIMIT 1
+            """
+        )
+    ).fetchall()
+    if not fk_rows:
+        session.execute(
+            text(
+                """
+                ALTER TABLE transacao
+                ADD CONSTRAINT fk_transacao_usuario
+                FOREIGN KEY (usuario_id) REFERENCES usuario(id)
+                """
+            )
+        )
+
+
+def _validar_usuario_existe(session: Session, usuario_id: int) -> None:
+    user_id = session.execute(
+        text("SELECT id FROM usuario WHERE id = :usuario_id LIMIT 1"),
+        {"usuario_id": usuario_id},
+    ).scalar_one_or_none()
+    if user_id is None:
+        raise ValueError(f"Usuario {usuario_id} nao encontrado na tabela usuario.")
+
+
+def garantir_estrutura_transacao(session: Session) -> None:
+    garantir_tabela_transacoes(session)
+    _garantir_usuario_fk_obrigatorio(session)
 
 
 def _variantes_data(data: str) -> list[str]:
@@ -61,7 +104,7 @@ def _variantes_data(data: str) -> list[str]:
     return [data]
 
 
-def transacao_existente_id(session: Session, t: TransacaoNormalizada, usuario_id: str | None) -> int | None:
+def transacao_existente_id(session: Session, t: TransacaoNormalizada, usuario_id: int) -> int | None:
     """
     Conciliação: mesma data, mesmo tipo (receita/despesa) e mesmo valor.
     """
@@ -79,7 +122,7 @@ def transacao_existente_id(session: Session, t: TransacaoNormalizada, usuario_id
     return session.execute(q).scalar_one_or_none()
 
 
-def inserir_transacao(session: Session, t: TransacaoNormalizada, arquivo_origem: str, usuario_id: str | None) -> int:
+def inserir_transacao(session: Session, t: TransacaoNormalizada, arquivo_origem: str, usuario_id: int) -> int:
     """Insere uma linha na tabela transacao (após checagem de duplicidade por data/tipo/valor)."""
     nova = Transacao(
         usuario_id=usuario_id,
@@ -101,7 +144,7 @@ def processar_com_conciliacao(
     arquivo_origem: str,
     itens: list[TransacaoNormalizada],
     persistir: bool,
-    usuario_id: str | None = None,
+    usuario_id: int,
 ) -> ResultadoEtl:
     linhas: list[LinhaConciliacao] = []
     duplicatas = 0
@@ -110,7 +153,8 @@ def processar_com_conciliacao(
     if persistir:
         try:
             garantir_tabela_transacoes(session)
-            _garantir_coluna_usuario_id(session)
+            _garantir_usuario_fk_obrigatorio(session)
+            _validar_usuario_existe(session, usuario_id)
         except Exception as e:
             logger.error(f"Erro ao criar tabela transacoes: {e}")
             raise
@@ -134,7 +178,13 @@ def processar_com_conciliacao(
                 logger.error(f"Erro ao processar transacao {t}: {e}")
                 raise
         linhas.append(
-            LinhaConciliacao(transacao=t, ja_existia=ja_existia, inserida=inserida, transacao_id=transacao_id)
+            LinhaConciliacao(
+                transacao=t,
+                ja_existia=ja_existia,
+                inserida=inserida,
+                transacao_id=transacao_id,
+                usuario_id=usuario_id if transacao_id is not None else None,
+            )
         )
 
     if persistir:

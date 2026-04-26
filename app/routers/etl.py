@@ -12,7 +12,7 @@ from app.etl import extrair_bradesco_csv, extrair_c6_csv, extrair_itau_pdf
 from app.etl.bradesco import extrair_dataframe_bradesco_csv
 from app.etl.c6 import extrair_dataframe_c6_csv
 from app.schemas import Banco, ResultadoEtl
-from app.services.conciliacao import processar_com_conciliacao
+from app.services.conciliacao import garantir_estrutura_transacao, processar_com_conciliacao
 
 router = APIRouter(prefix="/etl", tags=["etl"])
 
@@ -20,7 +20,7 @@ router = APIRouter(prefix="/etl", tags=["etl"])
 SQL_CREATE_IMPORTACOES_HISTORICO = """
 CREATE TABLE IF NOT EXISTS importacao_historico (
     id INT AUTO_INCREMENT PRIMARY KEY,
-    usuario_id VARCHAR(64) NOT NULL,
+    usuario_id INT NOT NULL,
     tipo VARCHAR(50) NOT NULL,
     arquivo VARCHAR(255) NOT NULL,
     data TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -28,29 +28,54 @@ CREATE TABLE IF NOT EXISTS importacao_historico (
     registros INT NOT NULL DEFAULT 0,
     novos INT NOT NULL DEFAULT 0,
     atualizados INT NOT NULL DEFAULT 0,
-    erros INT NOT NULL DEFAULT 0
+    erros INT NOT NULL DEFAULT 0,
+    CONSTRAINT fk_importacao_historico_usuario FOREIGN KEY (usuario_id) REFERENCES usuario(id)
 )
 """
 
 
+def _garantir_usuario_fk_historico(session: Session) -> None:
+    cols = session.execute(text("SHOW COLUMNS FROM importacao_historico LIKE 'usuario_id'")).mappings().all()
+    if not cols:
+        session.execute(text("ALTER TABLE importacao_historico ADD COLUMN usuario_id INT NULL"))
+    session.execute(text("ALTER TABLE importacao_historico MODIFY COLUMN usuario_id INT NOT NULL"))
+
+    fk_rows = session.execute(
+        text(
+            """
+            SELECT CONSTRAINT_NAME
+            FROM information_schema.KEY_COLUMN_USAGE
+            WHERE TABLE_SCHEMA = DATABASE()
+              AND TABLE_NAME = 'importacao_historico'
+              AND COLUMN_NAME = 'usuario_id'
+              AND REFERENCED_TABLE_NAME = 'usuario'
+              AND REFERENCED_COLUMN_NAME = 'id'
+            LIMIT 1
+            """
+        )
+    ).fetchall()
+    if not fk_rows:
+        session.execute(
+            text(
+                """
+                ALTER TABLE importacao_historico
+                ADD CONSTRAINT fk_importacao_historico_usuario
+                FOREIGN KEY (usuario_id) REFERENCES usuario(id)
+                """
+            )
+        )
+
+
 def _garantir_tabela_historico(session: Session) -> None:
     session.execute(text(SQL_CREATE_IMPORTACOES_HISTORICO))
-    cols = session.execute(text("SHOW COLUMNS FROM importacao_historico LIKE 'usuario_id'")).fetchall()
-    if not cols:
-        session.execute(text("ALTER TABLE importacao_historico ADD COLUMN usuario_id VARCHAR(64) NOT NULL DEFAULT ''"))
-
-
-def _garantir_coluna_usuario_id_transacao(session: Session) -> None:
-    cols = session.execute(text("SHOW COLUMNS FROM transacao LIKE 'usuario_id'")).fetchall()
-    if not cols:
-        session.execute(text("ALTER TABLE transacao ADD COLUMN usuario_id VARCHAR(64) NULL"))
+    _garantir_usuario_fk_historico(session)
 
 
 def _registrar_historico_importacao(
     session: Session,
     banco: Banco,
     resultado: ResultadoEtl,
-    usuario_id: str,
+    usuario_id: int,
 ) -> None:
     _garantir_tabela_historico(session)
     session.execute(
@@ -86,7 +111,7 @@ def _validar_extensao(nome_arquivo: str, banco: Banco) -> None:
 @router.post("/upload", response_model=ResultadoEtl)
 async def upload_extrato(
     banco: Banco,
-    usuario_id: str,
+    usuario_id: int,
     arquivo: UploadFile = File(...),
     persistir: bool = False,
     session: Session = Depends(get_session),
@@ -127,6 +152,9 @@ async def upload_extrato(
             status_code=503,
             detail=f"Falha de banco de dados ao persistir conciliação: {e}",
         ) from e
+    except ValueError as e:
+        session.rollback()
+        raise HTTPException(status_code=400, detail=str(e)) from e
     except Exception as e:
         session.rollback()
         raise HTTPException(status_code=500, detail=f"Falha na conciliação: {e}") from e
@@ -134,7 +162,7 @@ async def upload_extrato(
 
 @router.get("/importacao/historico")
 def listar_historico_importacoes(
-    usuario_id: str,
+    usuario_id: int,
     limit: int = 50,
     session: Session = Depends(get_session),
 ):
@@ -224,7 +252,7 @@ async def preview_extrato(
 
 @router.get("/extrato/csv")
 def exportar_extrato_csv(
-    usuario_id: str,
+    usuario_id: int,
     session: Session = Depends(get_session),
 ):
     """
@@ -235,7 +263,7 @@ def exportar_extrato_csv(
     contraparte, arquivo_origem, data_insercao
     """
     try:
-        _garantir_coluna_usuario_id_transacao(session)
+        garantir_estrutura_transacao(session)
         # Busca somente as transações do usuário informado.
         transacoes = session.query(Transacao).filter(Transacao.usuario_id == usuario_id).all()
         
