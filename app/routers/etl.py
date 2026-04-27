@@ -20,7 +20,7 @@ router = APIRouter(prefix="/etl", tags=["etl"])
 SQL_CREATE_IMPORTACOES_HISTORICO = """
 CREATE TABLE IF NOT EXISTS importacao_historico (
     id INT AUTO_INCREMENT PRIMARY KEY,
-    usuario_id INT NOT NULL,
+    usuario_id INT,
     tipo VARCHAR(50) NOT NULL,
     arquivo VARCHAR(255) NOT NULL,
     data TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -38,7 +38,7 @@ def _garantir_usuario_fk_historico(session: Session) -> None:
     cols = session.execute(text("SHOW COLUMNS FROM importacao_historico LIKE 'usuario_id'")).mappings().all()
     if not cols:
         session.execute(text("ALTER TABLE importacao_historico ADD COLUMN usuario_id INT NULL"))
-    session.execute(text("ALTER TABLE importacao_historico MODIFY COLUMN usuario_id INT NOT NULL"))
+    session.execute(text("ALTER TABLE importacao_historico MODIFY COLUMN usuario_id INT NULL"))
 
     fk_rows = session.execute(
         text(
@@ -75,7 +75,7 @@ def _registrar_historico_importacao(
     session: Session,
     banco: Banco,
     resultado: ResultadoEtl,
-    usuario_id: int,
+    usuario_id: int | None,
 ) -> None:
     _garantir_tabela_historico(session)
     session.execute(
@@ -111,7 +111,7 @@ def _validar_extensao(nome_arquivo: str, banco: Banco) -> None:
 @router.post("/upload", response_model=ResultadoEtl)
 async def upload_extrato(
     banco: Banco,
-    usuario_id: int,
+    usuario_id: int | None = None,
     arquivo: UploadFile = File(...),
     persistir: bool = False,
     session: Session = Depends(get_session),
@@ -300,7 +300,7 @@ def exportar_extrato_csv(
                 transacao.id,
                 transacao.usuario_id or "",
                 transacao.honorario_id,
-                transacao.titulo or "",
+                transacao.titulo or "", 
                 str(transacao.valor) if transacao.valor else "",
                 transacao.tipo or "",
                 transacao.status_financeiro or "",
