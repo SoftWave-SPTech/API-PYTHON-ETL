@@ -145,12 +145,16 @@ def inserir_transacao(
     data_pagamento_iso = _converter_data_para_iso(t.data_pagamento)
     nova = Transacao(
         usuario_id=usuario_id,
-        honorario_id=None,
+        honorario_id=1,
+        data_emissao=data_pagamento_iso,
+        data_vencimento=data_pagamento_iso,
         data_pagamento=data_pagamento_iso,
         titulo=descricao[:150],
         descricao=descricao[:255],
         tipo=t.tipo.value,
         valor=t.valor,
+        status_financeiro="pago",
+        status_aprovacao="aprovado",
         arquivo_origem=arquivo_origem[:255],
     )
     session.add(nova)
