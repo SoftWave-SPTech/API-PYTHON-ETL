@@ -125,6 +125,7 @@ Exporta todas as transações da tabela do banco de dados em formato CSV.
 **Resposta (200):**
 Retorna um arquivo CSV com as seguintes colunas:
 - `id`: ID da transação
+- `usuario_id`: ID do usuário
 - `honorario_id`: ID do honorário associado (chave estrangeira)
 - `titulo`: Título da transação
 - `valor`: Valor da transação

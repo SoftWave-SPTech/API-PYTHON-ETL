@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 SQL_CREATE_TRANSACOES = """
 CREATE TABLE IF NOT EXISTS transacao (
     id INT AUTO_INCREMENT PRIMARY KEY,
-    usuario_id INT NOT NULL,
+    usuario_id INT,
     honorario_id INT,
     titulo VARCHAR(150),
     valor DECIMAL(10,2),
@@ -20,7 +20,7 @@ CREATE TABLE IF NOT EXISTS transacao (
     status_aprovacao VARCHAR(50),
     data_emissao DATE,
     data_vencimento DATE,
-    data_pagamento VARCHAR(10) NOT NULL,
+    data_pagamento DATE NOT NULL,
     descricao TEXT,
     observacoes TEXT,
     contraparte VARCHAR(150),
@@ -37,14 +37,14 @@ def garantir_tabela_transacoes(session: Session) -> None:
     session.execute(text(SQL_CREATE_TRANSACOES))
 
 
-def _garantir_usuario_fk_obrigatorio(session: Session) -> None:
+def _garantir_usuario_fk_opcional(session: Session) -> None:
     """
-    Garante que transacao.usuario_id seja INT NOT NULL e FK para usuario(id).
+    Garante que transacao.usuario_id exista como INT NULL e com FK para usuario(id).
     """
     colunas = session.execute(text("SHOW COLUMNS FROM transacao LIKE 'usuario_id'")).mappings().all()
     if not colunas:
         session.execute(text("ALTER TABLE transacao ADD COLUMN usuario_id INT NULL"))
-    session.execute(text("ALTER TABLE transacao MODIFY COLUMN usuario_id INT NOT NULL"))
+    session.execute(text("ALTER TABLE transacao MODIFY COLUMN usuario_id INT NULL"))
 
     fk_rows = session.execute(
         text(
@@ -83,7 +83,22 @@ def _validar_usuario_existe(session: Session, usuario_id: int) -> None:
 
 def garantir_estrutura_transacao(session: Session) -> None:
     garantir_tabela_transacoes(session)
-    _garantir_usuario_fk_obrigatorio(session)
+    _garantir_usuario_fk_opcional(session)
+
+
+def _converter_data_para_iso(data: str) -> str | None:
+    """Converte DD/MM/YYYY para YYYY-MM-DD para armazenamento no banco."""
+    data = (data or "").strip()
+    if not data:
+        return None
+    partes = data.split("/")
+    if len(partes) == 3:
+        d, m, y = partes
+        return f"{y}-{m}-{d}"
+    # Se já está em ISO format (YYYY-MM-DD), retorna como está
+    if data.count("-") == 2:
+        return data
+    return None
 
 
 def _variantes_data(data: str) -> list[str]:
@@ -104,33 +119,42 @@ def _variantes_data(data: str) -> list[str]:
     return [data]
 
 
-def transacao_existente_id(session: Session, t: TransacaoNormalizada, usuario_id: int) -> int | None:
+def transacao_existente_id(session: Session, t: TransacaoNormalizada, usuario_id: int | None) -> int | None:
     """
     Conciliação: mesma data, mesmo tipo (receita/despesa) e mesmo valor.
     """
     datas = _variantes_data(t.data_pagamento)
-    q = (
-        select(Transacao.id)
-        .where(
-            Transacao.usuario_id == usuario_id,
-            Transacao.data_pagamento.in_(datas),
-            Transacao.tipo == t.tipo.value,
-            Transacao.valor == t.valor,
-        )
-        .limit(1)
-    )
+    filtros = [
+        Transacao.data_pagamento.in_(datas),
+        Transacao.tipo == t.tipo.value,
+        Transacao.valor == t.valor,
+    ]
+    if usuario_id is None:
+        filtros.append(Transacao.usuario_id.is_(None))
+    else:
+        filtros.append(Transacao.usuario_id == usuario_id)
+    q = select(Transacao.id).where(*filtros).limit(1)
     return session.execute(q).scalar_one_or_none()
 
 
-def inserir_transacao(session: Session, t: TransacaoNormalizada, arquivo_origem: str, usuario_id: int) -> int:
+def inserir_transacao(
+    session: Session, t: TransacaoNormalizada, arquivo_origem: str, usuario_id: int | None
+) -> int:
     """Insere uma linha na tabela transacao (após checagem de duplicidade por data/tipo/valor)."""
+    descricao = (t.descricao or "").strip()
+    data_pagamento_iso = _converter_data_para_iso(t.data_pagamento)
     nova = Transacao(
         usuario_id=usuario_id,
-        honorario_id=None,
-        data_pagamento=t.data_pagamento[:10],
-        descricao=(t.descricao or "")[:255],
+        honorario_id=1,
+        data_emissao=data_pagamento_iso,
+        data_vencimento=data_pagamento_iso,
+        data_pagamento=data_pagamento_iso,
+        titulo=descricao[:150],
+        descricao=descricao[:255],
         tipo=t.tipo.value,
         valor=t.valor,
+        status_financeiro="pago",
+        status_aprovacao="aprovado",
         arquivo_origem=arquivo_origem[:255],
     )
     session.add(nova)
@@ -144,7 +168,7 @@ def processar_com_conciliacao(
     arquivo_origem: str,
     itens: list[TransacaoNormalizada],
     persistir: bool,
-    usuario_id: int,
+    usuario_id: int | None,
 ) -> ResultadoEtl:
     linhas: list[LinhaConciliacao] = []
     duplicatas = 0
@@ -153,8 +177,9 @@ def processar_com_conciliacao(
     if persistir:
         try:
             garantir_tabela_transacoes(session)
-            _garantir_usuario_fk_obrigatorio(session)
-            _validar_usuario_existe(session, usuario_id)
+            if usuario_id is not None:
+                _validar_usuario_existe(session, usuario_id)
+            _garantir_usuario_fk_opcional(session)
         except Exception as e:
             logger.error(f"Erro ao criar tabela transacoes: {e}")
             raise
@@ -183,7 +208,7 @@ def processar_com_conciliacao(
                 ja_existia=ja_existia,
                 inserida=inserida,
                 transacao_id=transacao_id,
-                usuario_id=usuario_id if transacao_id is not None else None,
+                usuario_id=usuario_id,
             )
         )
 
