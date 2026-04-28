@@ -56,15 +56,27 @@ def extrair_dataframe_c6_csv(conteudo: bytes) -> pd.DataFrame:
     ).dt.strftime("%d/%m/%Y")
 
     def _parse_valor(serie: pd.Series) -> pd.Series:
-        return (
-            serie.astype(str)
-            .str.replace(r"\s", "", regex=True)
-            .str.replace(".", "", regex=False)
-            .str.replace(",", ".", regex=False)
-            .str.replace(r"[^\d\.-]", "", regex=True)
-            .pipe(pd.to_numeric, errors="coerce")
-            .fillna(0.0)
-        )
+        """
+        Converte valores para float.
+        O CSV do C6 usa ponto como decimal (1730.00) ou vírgula (1.730,00).
+        """
+        def converter_valor(valor_str: str) -> float:
+            valor_str = str(valor_str).strip()
+            
+            # Remove espaços
+            valor_str = valor_str.replace(" ", "")
+            
+            # Se não tem vírgula, assume que o último ponto é decimal
+            if "," not in valor_str:
+                # Já está em formato correto (1730.00) ou inteiro (1730)
+                return float(valor_str) if valor_str else 0.0
+            
+            # Se tem vírgula, é formato brasileiro (1.730,00)
+            # Remove pontos (separadores de milhares) e troca vírgula por ponto
+            valor_str = valor_str.replace(".", "").replace(",", ".")
+            return float(valor_str) if valor_str else 0.0
+        
+        return serie.astype(str).apply(converter_valor).fillna(0.0)
 
     df["entrada"] = _parse_valor(df["entrada"])
     df["saida"] = _parse_valor(df["saida"])
